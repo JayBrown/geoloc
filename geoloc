@@ -1,0 +1,81 @@
+#!/bin/zsh
+# shellcheck shell=bash
+
+# geoloc v0.1
+
+if [[ $(/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport -I 2>/dev/null) == "AirPort: Off" ]] ; then
+	echo "Error: WiFi disabled" >&2
+	exit 1
+fi
+queryurl="https://api.mylnikov.org/geolocation/wifi?v=1.1&data=open&search="
+closestwifis=$(/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport -s | grep ":" | head -13)
+if ! [[ $closestwifis ]] ; then
+	echo "Error: WiFi scan" >&2
+	exit 1
+fi
+query=""
+while read -r closewifi
+do
+	cnid=2
+	cnss=3
+	while true
+	do
+		wifimac=$(echo "$closewifi" | awk '{print $'"$cnid"'}')
+		if echo "$wifimac" | grep "^[a-f0-9][a-f0-9]:[a-f0-9][a-f0-9]:[a-f0-9][a-f0-9]:[a-f0-9][a-f0-9]:[a-f0-9][a-f0-9]:[a-f0-9][a-f0-9]$" &>/dev/null ; then
+			wifiss=$(echo "$closewifi" | awk '{print $'"$cnss"'}')
+			break
+		else
+			((cnid++))
+			((cnss++))
+		fi
+	done
+	if [[ $query ]] ; then
+		query="$query;$wifimac,$wifiss"
+	else
+		query="$wifimac,$wifiss"
+	fi
+done < <(echo "$closestwifis")
+query64=$(echo "$query" | base64 -)
+queryurl="$queryurl{$query64}"
+geoloc_all=$(curl -s -m 60 "$queryurl" 2>/dev/null)
+if ! [[ $geoloc_all ]] ; then
+	echo "Error: raw geolocation data" >&2
+	exit 1
+fi
+if [[ $1 == "--raw" ]] ; then
+	echo "$geoloc_all"
+	exit 0
+fi
+geoloc_raw=$(echo "$geoloc_all" | awk -F"lat\"\:\ " '{print $2}')
+latitude=$(echo "$geoloc_raw" | awk -F"," '{print $1}')
+if ! [[ $latitude ]] ; then
+	echo "Error: latitude parsing" >&2
+	exit 1
+fi
+longitude=$(echo "$geoloc_raw" | awk -F"lon\"\:\ " '{print $2}' | awk -F"," '{print $1}')
+if ! [[ $longitude ]] ; then
+	echo "Error: longitude parsing" >&2
+	exit 1
+fi
+echo "$latitude $longitude"
+if [[ $1 != "--solar" ]] ; then
+	exit 0
+fi
+solar_all=$(curl -s -m 60 "v2.wttr.in/$latitude,$longitude?format=%S;%s" 2>/dev/null)
+if ! [[ $solar_all ]] ; then
+	echo "Error: solar data" >&2
+	exit 1
+fi
+sunrise=$(echo "$solar_all" | awk -F";" '{print $1}')
+if ! [[ $sunrise ]] ; then
+	echo "Error: sunrise parsing" >&2
+	exit 1
+fi
+sunset=$(echo "$solar_all" | awk -F";" '{print $2}')
+if ! [[ $sunset ]] ; then
+	echo "Error: sunset parsing" >&2
+	exit 1
+fi
+echo -e "sunrise: $sunrise\nsunset: $sunset"
+	
+exit 0
